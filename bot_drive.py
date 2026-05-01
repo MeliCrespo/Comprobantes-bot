@@ -1,7 +1,16 @@
 import os
 import pickle
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import re
+from datetime import datetime
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+)
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -13,14 +22,9 @@ from google.auth.transport.requests import Request
 # =========================
 
 TELEGRAM_TOKEN = "8403023355:AAGPj8Qe0Etumr8d9alVGUbndlTHdP_zo_U"
+PARENT_FOLDER_ID = "1btRcBbKhvPPHTQoTfcdLE20phapGSqKC"
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
-
-FOLDERS = {
-    "Alquiler": "ID_CARPETA_ALQUILER",
-    "Luz": "ID_CARPETA_LUZ",
-    "Otros": "ID_CARPETA_OTROS"
-}
 
 # =========================
 # GOOGLE DRIVE AUTH
@@ -49,21 +53,52 @@ def get_drive_service():
 drive_service = get_drive_service()
 
 # =========================
-# LOGICA
+# DRIVE HELPERS
 # =========================
 
-def get_categoria(texto):
-    if not texto:
-        return "Otros"
+def list_folders(service, parent_id):
+    query = f"mimeType = 'application/vnd.google-apps.folder' and '{parent_id}' in parents and trashed = false"
 
-    texto = texto.lower()
+    results = service.files().list(
+        q=query,
+        fields="files(id, name)"
+    ).execute()
 
-    if "alquiler" in texto:
-        return "Alquiler"
-    elif "luz" in texto:
-        return "Luz"
-    else:
-        return "Otros"
+    return results.get('files', [])
+
+
+def find_folder(service, folder_name, parent_id):
+    query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and '{parent_id}' in parents and trashed = false"
+
+    results = service.files().list(
+        q=query,
+        fields="files(id, name)"
+    ).execute()
+
+    files = results.get('files', [])
+    return files[0]['id'] if files else None
+
+
+def create_folder(service, folder_name, parent_id):
+    file_metadata = {
+        'name': folder_name,
+        'mimeType': 'application/vnd.google-apps.folder',
+        'parents': [parent_id]
+    }
+
+    folder = service.files().create(
+        body=file_metadata,
+        fields='id'
+    ).execute()
+
+    return folder.get('id')
+
+
+def get_or_create_folder(service, folder_name, parent_id):
+    folder_id = find_folder(service, folder_name, parent_id)
+    if folder_id:
+        return folder_id
+    return create_folder(service, folder_name, parent_id)
 
 
 def upload_file(file_path, file_name, folder_id):
@@ -83,11 +118,32 @@ def upload_file(file_path, file_name, folder_id):
     return file.get('id')
 
 # =========================
-# HANDLER
+# HELPERS
+# =========================
+
+def extract_year(text):
+    if not text:
+        return str(datetime.now().year)
+
+    match = re.search(r"(20\d{2})", text)
+    if match:
+        return match.group(1)
+
+    return str(datetime.now().year)
+
+# =========================
+# STATE
+# =========================
+
+user_states = {}
+
+# =========================
+# HANDLERS
 # =========================
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+    user_id = message.from_user.id
 
     text = message.caption or message.text
 
@@ -102,33 +158,108 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ext = ".jpg"
 
     if not file:
-        await message.reply_text("❌ Enviá una imagen o PDF con texto")
+        await message.reply_text("❌ Enviá un archivo válido")
         return
 
-    if not text:
-        await message.reply_text("❌ Agregá un texto (ej: Alquiler Marzo 2026)")
-        return
-
-    file_name = f"{text}{ext}"
-    categoria = get_categoria(text)
-    folder_id = FOLDERS.get(categoria, FOLDERS["Otros"])
-
-    temp_path = f"temp{ext}"
+    temp_path = f"temp_{user_id}{ext}"
     await file.download_to_drive(temp_path)
 
-    try:
-        upload_file(temp_path, file_name, folder_id)
+    user_states[user_id] = {
+        "file_path": temp_path,
+        "file_name": f"{text}{ext}" if text else f"archivo{ext}",
+        "waiting_for_folder_name": False
+    }
 
-        await message.reply_text(
-            f"✅ Guardado en {categoria} como:\n{file_name}"
+    folders = list_folders(drive_service, PARENT_FOLDER_ID)
+
+    keyboard = [
+        [InlineKeyboardButton(f["name"], callback_data=f"folder_{f['id']}")]
+        for f in folders
+    ]
+
+    keyboard.append([InlineKeyboardButton("➕ Nueva carpeta", callback_data="new_folder")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await message.reply_text(
+        "📁 ¿En qué carpeta querés guardarlo?",
+        reply_markup=reply_markup
+    )
+
+
+async def handle_folder_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    if user_id not in user_states:
+        await query.edit_message_text("❌ No hay archivo pendiente")
+        return
+
+    data = query.data
+
+    if data == "new_folder":
+        user_states[user_id]["waiting_for_folder_name"] = True
+        await query.edit_message_text("✏️ Escribí el nombre de la nueva carpeta:")
+        return
+
+    parent_folder_id = data.replace("folder_", "")
+    state = user_states[user_id]
+
+    year = extract_year(state["file_name"])
+
+    # crear subcarpeta año
+    year_folder_id = get_or_create_folder(drive_service, year, parent_folder_id)
+
+    try:
+        upload_file(state["file_path"], state["file_name"], year_folder_id)
+
+        await query.edit_message_text(
+            f"✅ Guardado en {year} como:\n{state['file_name']}"
         )
 
     except Exception as e:
-        await message.reply_text(f"❌ Error: {str(e)}")
+        await query.edit_message_text(f"❌ Error: {str(e)}")
 
     finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        if os.path.exists(state["file_path"]):
+            os.remove(state["file_path"])
+        del user_states[user_id]
+
+
+async def handle_new_folder_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    if user_id not in user_states:
+        return
+
+    state = user_states[user_id]
+
+    if not state.get("waiting_for_folder_name"):
+        return
+
+    folder_name = update.message.text
+
+    try:
+        main_folder_id = create_folder(drive_service, folder_name, PARENT_FOLDER_ID)
+
+        year = extract_year(state["file_name"])
+        year_folder_id = get_or_create_folder(drive_service, year, main_folder_id)
+
+        upload_file(state["file_path"], state["file_name"], year_folder_id)
+
+        await update.message.reply_text(
+            f"✅ Carpeta '{folder_name}/{year}' creada y archivo guardado"
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    finally:
+        if os.path.exists(state["file_path"]):
+            os.remove(state["file_path"])
+        del user_states[user_id]
 
 # =========================
 # MAIN
@@ -137,12 +268,13 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(
-        MessageHandler(filters.Document.ALL | filters.PHOTO, handle_file)
-    )
+    app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_file))
+    app.add_handler(CallbackQueryHandler(handle_folder_selection))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_folder_name))
 
     print("Bot corriendo...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()

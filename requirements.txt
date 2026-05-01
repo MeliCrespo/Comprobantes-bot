@@ -1,0 +1,2 @@
+pip install python-telegram-bot google-api-python-client google-auth
+pip freeze > requirements.txt

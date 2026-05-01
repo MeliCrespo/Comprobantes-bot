@@ -12,7 +12,7 @@ from google.auth.transport.requests import Request
 # CONFIG
 # =========================
 
-TELEGRAM_TOKEN = "PEGAR_TOKEN_ACA"
+TELEGRAM_TOKEN = "8403023355:AAGPj8Qe0Etumr8d9alVGUbndlTHdP_zo_U"
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 

@@ -21,8 +21,8 @@ from google.auth.transport.requests import Request
 # CONFIG
 # =========================
 
-TELEGRAM_TOKEN = "8403023355:AAGPj8Qe0Etumr8d9alVGUbndlTHdP_zo_U"
-PARENT_FOLDER_ID = "1btRcBbKhvPPHTQoTfcdLE20phapGSqKC"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+PARENT_FOLDER_ID = os.getenv("PARENT_FOLDER_ID")
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
@@ -30,12 +30,20 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 # GOOGLE DRIVE AUTH
 # =========================
 
+import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 def get_drive_service():
-    creds = service_account.Credentials.from_service_account_file(
-        'comprobantes-meli-e061a85f14e0.json',
+    json_str = os.getenv("SERVICE_ACCOUNT_JSON")
+
+    if not json_str:
+        raise ValueError("❌ Falta SERVICE_ACCOUNT_JSON")
+
+    creds_dict = json.loads(json_str)
+
+    creds = service_account.Credentials.from_service_account_info(
+        creds_dict,
         scopes=['https://www.googleapis.com/auth/drive.file']
     )
 

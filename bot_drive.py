@@ -26,7 +26,7 @@ PARENT_FOLDER_ID = os.getenv("PARENT_FOLDER_ID")
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 # =========================
-# GOOGLE DRIVE AUTH (SERVICE ACCOUNT)
+# GOOGLE DRIVE AUTH
 # =========================
 
 def get_drive_service():
@@ -55,7 +55,9 @@ def list_folders(service, parent_id):
 
     results = service.files().list(
         q=query,
-        fields="files(id, name)"
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
     ).execute()
 
     return results.get('files', [])
@@ -66,7 +68,9 @@ def find_folder(service, folder_name, parent_id):
 
     results = service.files().list(
         q=query,
-        fields="files(id, name)"
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
     ).execute()
 
     files = results.get('files', [])
@@ -82,7 +86,8 @@ def create_folder(service, folder_name, parent_id):
 
     folder = service.files().create(
         body=file_metadata,
-        fields='id'
+        fields='id',
+        supportsAllDrives=True
     ).execute()
 
     return folder.get('id')
@@ -106,7 +111,8 @@ def upload_file(file_path, file_name, folder_id):
     file = drive_service.files().create(
         body=file_metadata,
         media_body=media,
-        fields='id'
+        fields='id',
+        supportsAllDrives=True
     ).execute()
 
     return file.get('id')

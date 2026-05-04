@@ -1,6 +1,6 @@
 import os
-import pickle
 import re
+import json
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -14,8 +14,7 @@ from telegram.ext import (
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 
 # =========================
 # CONFIG
@@ -27,12 +26,8 @@ PARENT_FOLDER_ID = os.getenv("PARENT_FOLDER_ID")
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 # =========================
-# GOOGLE DRIVE AUTH
+# GOOGLE DRIVE AUTH (SERVICE ACCOUNT)
 # =========================
-
-import json
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 
 def get_drive_service():
     json_str = os.getenv("SERVICE_ACCOUNT_JSON")
@@ -44,7 +39,7 @@ def get_drive_service():
 
     creds = service_account.Credentials.from_service_account_info(
         creds_dict,
-        scopes=['https://www.googleapis.com/auth/drive.file']
+        scopes=SCOPES
     )
 
     return build('drive', 'v3', credentials=creds)
@@ -207,8 +202,6 @@ async def handle_folder_selection(update: Update, context: ContextTypes.DEFAULT_
     state = user_states[user_id]
 
     year = extract_year(state["file_name"])
-
-    # crear subcarpeta año
     year_folder_id = get_or_create_folder(drive_service, year, parent_folder_id)
 
     try:
@@ -265,6 +258,12 @@ async def handle_new_folder_name(update: Update, context: ContextTypes.DEFAULT_T
 # =========================
 
 def main():
+    if not TELEGRAM_TOKEN:
+        raise ValueError("❌ Falta TELEGRAM_TOKEN")
+
+    if not PARENT_FOLDER_ID:
+        raise ValueError("❌ Falta PARENT_FOLDER_ID")
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_file))
